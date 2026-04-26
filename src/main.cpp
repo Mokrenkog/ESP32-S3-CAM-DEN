@@ -129,6 +129,14 @@
 #define MQTT_SHARED_KEY ""
 #endif
 
+#ifndef MQTT_USERNAME
+#define MQTT_USERNAME ""
+#endif
+
+#ifndef MQTT_PASSWORD
+#define MQTT_PASSWORD ""
+#endif
+
 #ifndef MQTT_VIDEO_INTERVAL_MS
 #define MQTT_VIDEO_INTERVAL_MS 450
 #endif
@@ -251,6 +259,7 @@ static void mqttSendStateLine();
 static void applyCameraSensorProfile(framesize_t frameSize, int jpegQuality, bool fullTuning = false);
 static void markMqttDisconnected(const char *status);
 static bool mqttTalkbackActive();
+static bool mqttHasBrokerCredentials();
 
 static bool relayConfigured() {
   return RELAY_ENABLED &&
@@ -2436,6 +2445,10 @@ static bool mqttTalkbackActive() {
          millis() - lastMqttSpeakerChunkMs < 1500;
 }
 
+static bool mqttHasBrokerCredentials() {
+  return strlen(MQTT_USERNAME) > 0;
+}
+
 static void mqttSendStateLine() {
   if (!mqttBridgeConfigured() || !mqttConnected) {
     return;
@@ -2540,7 +2553,18 @@ static bool connectMqttBridge() {
 
   uint64_t chipId = ESP.getEfuseMac();
   String clientId = String(MQTT_DEVICE_ID) + "-" + String(static_cast<uint32_t>(chipId & 0xffffffff), HEX);
-  bool connected = mqttClient.connect(clientId.c_str(), mqttPresenceTopic.c_str(), 0, true, "0");
+  bool connected = false;
+  if (mqttHasBrokerCredentials()) {
+    connected = mqttClient.connect(clientId.c_str(),
+                                   MQTT_USERNAME,
+                                   MQTT_PASSWORD,
+                                   mqttPresenceTopic.c_str(),
+                                   0,
+                                   true,
+                                   "0");
+  } else {
+    connected = mqttClient.connect(clientId.c_str(), mqttPresenceTopic.c_str(), 0, true, "0");
+  }
   if (!connected) {
     mqttStatus = "mqtt_connect_failed";
     mqttTransport.stop();

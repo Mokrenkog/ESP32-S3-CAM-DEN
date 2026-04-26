@@ -5,22 +5,26 @@
 
 #define MQTT_BRIDGE_ENABLED 1
 
-// Official public EMQX broker:
-// - MQTT over TCP: broker.emqx.io:1883
-// - MQTT over Secure WebSocket: wss://broker.emqx.io:8084/mqtt
-#define MQTT_BROKER_HOST "broker.emqx.io"
-#define MQTT_BROKER_PORT 1883
-#define MQTT_BROKER_WSS_URL "wss://broker.emqx.io:8084/mqtt"
-#define MQTT_USE_TLS 0
+// Example values for EMQX Cloud private deployment:
+// - ESP32: use MQTT over TLS 8883
+// - Browser: use Secure WebSocket WSS
+#define MQTT_BROKER_HOST "your-deployment.emqxsl.com"
+#define MQTT_BROKER_PORT 8883
+#define MQTT_BROKER_WSS_URL "wss://your-deployment.emqxsl.com:8084/mqtt"
+#define MQTT_USE_TLS 1
 
-// For maximum compatibility on ESP32 the board uses plain MQTT TCP.
-// The browser still uses secure WSS on GitHub Pages.
+// Quick start: allow TLS without CA pinning on the ESP32.
+// Later we can tighten this by pinning the CA certificate.
 #define MQTT_ALLOW_INSECURE_TLS 1
 
 // Use a long random secret because this broker is public.
 // Everyone on the public broker can theoretically observe messages.
 #define MQTT_DEVICE_ID "esp32-s3-cam-den-01"
 #define MQTT_SHARED_KEY "replace-with-very-long-random-shared-key"
+
+// EMQX broker authentication credentials.
+#define MQTT_USERNAME "esp32-device"
+#define MQTT_PASSWORD "replace-with-emqx-password"
 
 // Cloud stream tuning.
 #define MQTT_VIDEO_INTERVAL_MS 450
