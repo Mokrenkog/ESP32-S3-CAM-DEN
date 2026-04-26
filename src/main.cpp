@@ -1,7 +1,9 @@
 ﻿#include <Arduino.h>
 #include <WebServer.h>
 #include <WebSocketsClient.h>
+#include <WiFiClientSecure.h>
 #include <WiFi.h>
+#include <PubSubClient.h>
 #include <math.h>
 #include "driver/i2s_pdm.h"
 #include "driver/i2s_std.h"
@@ -21,6 +23,10 @@
 
 #if __has_include("relay_config.h")
 #include "relay_config.h"
+#endif
+
+#if __has_include("mqtt_bridge_config.h")
+#include "mqtt_bridge_config.h"
 #endif
 
 #ifndef WIFI_STA_SSID
@@ -91,6 +97,46 @@
 #define RELAY_RECONNECT_INTERVAL_MS 5000
 #endif
 
+#ifndef MQTT_BRIDGE_ENABLED
+#define MQTT_BRIDGE_ENABLED 0
+#endif
+
+#ifndef MQTT_BROKER_HOST
+#define MQTT_BROKER_HOST "broker.emqx.io"
+#endif
+
+#ifndef MQTT_BROKER_PORT
+#define MQTT_BROKER_PORT 8883
+#endif
+
+#ifndef MQTT_BROKER_WSS_URL
+#define MQTT_BROKER_WSS_URL "wss://broker.emqx.io:8084/mqtt"
+#endif
+
+#ifndef MQTT_ALLOW_INSECURE_TLS
+#define MQTT_ALLOW_INSECURE_TLS 1
+#endif
+
+#ifndef MQTT_DEVICE_ID
+#define MQTT_DEVICE_ID ""
+#endif
+
+#ifndef MQTT_SHARED_KEY
+#define MQTT_SHARED_KEY ""
+#endif
+
+#ifndef MQTT_VIDEO_INTERVAL_MS
+#define MQTT_VIDEO_INTERVAL_MS 180
+#endif
+
+#ifndef MQTT_STATE_INTERVAL_MS
+#define MQTT_STATE_INTERVAL_MS 10000
+#endif
+
+#ifndef MQTT_RECONNECT_INTERVAL_MS
+#define MQTT_RECONNECT_INTERVAL_MS 5000
+#endif
+
 constexpr uint16_t HTTP_PORT = 80;
 constexpr uint16_t AUDIO_PORT = 81;
 constexpr uint16_t SPEAKER_INPUT_PORT = 82;
@@ -112,6 +158,7 @@ constexpr uint32_t SPEAKER_SAMPLE_RATE = 16000;
 constexpr size_t SPEAKER_FRAMES = 256;
 constexpr i2s_port_t SPEAKER_I2S_PORT = I2S_NUM_1;
 constexpr int SPEAKER_DEFAULT_AMPLITUDE = 2500;
+constexpr size_t MQTT_AUDIO_FRAMES = 1024;
 constexpr uint8_t RELAY_PACKET_VIDEO_JPEG = 1;
 constexpr uint8_t RELAY_PACKET_AUDIO_PCM = 2;
 
@@ -121,12 +168,16 @@ WiFiServer speakerInputServer(SPEAKER_INPUT_PORT);
 WebSocketsClient relayControlSocket;
 WebSocketsClient relayMediaSocket;
 WebSocketsClient relaySpeakerSocket;
+WiFiClientSecure mqttTransport;
+PubSubClient mqttClient(mqttTransport);
 
 i2s_chan_handle_t microphoneRxChannel = nullptr;
 i2s_chan_handle_t speakerTxChannel = nullptr;
 SemaphoreHandle_t speakerUseMutex = nullptr;
 SemaphoreHandle_t relaySocketMutex = nullptr;
+SemaphoreHandle_t mqttClientMutex = nullptr;
 TaskHandle_t relayMediaTaskHandle = nullptr;
+TaskHandle_t mqttMediaTaskHandle = nullptr;
 
 bool cameraReady = false;
 bool microphoneReady = false;
@@ -140,6 +191,9 @@ unsigned long lastCameraUseMs = 0;
 unsigned long lastHeartbeatMs = 0;
 unsigned long lastRelayStateMs = 0;
 unsigned long lastRelaySpeakerChunkMs = 0;
+unsigned long lastMqttStateMs = 0;
+unsigned long lastMqttConnectAttemptMs = 0;
+unsigned long lastMqttSpeakerChunkMs = 0;
 
 bool relayControlConnected = false;
 bool relayMediaConnected = false;
@@ -153,6 +207,20 @@ String relayStatus = RELAY_ENABLED ? "configured" : "disabled";
 String relayControlPath;
 String relayMediaPath;
 String relaySpeakerPath;
+bool mqttConnected = false;
+bool mqttVideoRequested = false;
+bool mqttAudioRequested = false;
+bool mqttUseRightChannel = false;
+int mqttAudioShift = AUDIO_SAMPLE_SHIFT;
+int mqttAudioGain = AUDIO_SAMPLE_GAIN;
+String mqttStatus = MQTT_BRIDGE_ENABLED ? "configured" : "disabled";
+String mqttTopicPrefix;
+String mqttControlTopic;
+String mqttVideoTopic;
+String mqttAudioTopic;
+String mqttSpeakerTopic;
+String mqttStateTopic;
+String mqttPresenceTopic;
 
 static void stopCamera();
 static void relayControlSocketEvent(WStype_t type, uint8_t *payload, size_t length);
@@ -161,12 +229,26 @@ static void relaySpeakerSocketEvent(WStype_t type, uint8_t *payload, size_t leng
 static void relayMediaTask(void *parameter);
 static void relaySendStateLine();
 static void startRelayClients();
+static void mqttCallback(char *topic, uint8_t *payload, unsigned int length);
+static void mqttMediaTask(void *parameter);
+static bool connectMqttBridge();
+static void startMqttBridge();
+static void mqttSendStateLine();
 
 static bool relayConfigured() {
   return RELAY_ENABLED &&
          strlen(RELAY_HOST) > 0 &&
          strlen(RELAY_DEVICE_ID) > 0 &&
          strlen(RELAY_DEVICE_TOKEN) > 0;
+}
+
+static bool mqttBridgeConfigured() {
+  String sharedKey = MQTT_SHARED_KEY;
+  return MQTT_BRIDGE_ENABLED &&
+         strlen(MQTT_BROKER_HOST) > 0 &&
+         strlen(MQTT_DEVICE_ID) > 0 &&
+         sharedKey.length() >= 16 &&
+         sharedKey != "replace-with-very-long-random-shared-key";
 }
 
 static bool claimRelaySocket(uint32_t timeoutMs = 100) {
@@ -179,6 +261,19 @@ static bool claimRelaySocket(uint32_t timeoutMs = 100) {
 static void releaseRelaySocket() {
   if (relaySocketMutex != nullptr) {
     xSemaphoreGiveRecursive(relaySocketMutex);
+  }
+}
+
+static bool claimMqttClient(uint32_t timeoutMs = 100) {
+  if (mqttClientMutex == nullptr) {
+    return true;
+  }
+  return xSemaphoreTakeRecursive(mqttClientMutex, pdMS_TO_TICKS(timeoutMs)) == pdTRUE;
+}
+
+static void releaseMqttClient() {
+  if (mqttClientMutex != nullptr) {
+    xSemaphoreGiveRecursive(mqttClientMutex);
   }
 }
 
@@ -1463,6 +1558,14 @@ static String htmlPage() {
     html += RELAY_HOST;
     html += F("</div>");
   }
+  html += F("</div><div class='box'>MQTT bridge<br><code>");
+  html += mqttStatus;
+  html += F("</code>");
+  if (mqttBridgeConfigured()) {
+    html += F("<div class='muted'>");
+    html += MQTT_BROKER_HOST;
+    html += F("</div>");
+  }
   html += F("</div><div class='box'>PSRAM<br><code>");
   html += hasPsramHeap() ? "available" : "not available, using DRAM";
   html += F("</code></div><div class='box'>Pins<br><code>");
@@ -1574,6 +1677,9 @@ static void handleHealth() {
   json += "\"relay_control_connected\":" + String(relayControlConnected ? "true" : "false") + ",";
   json += "\"relay_media_connected\":" + String(relayMediaConnected ? "true" : "false") + ",";
   json += "\"relay_speaker_connected\":" + String(relaySpeakerConnected ? "true" : "false") + ",";
+  json += "\"mqtt\":\"" + mqttStatus + "\",";
+  json += "\"mqtt_ready\":" + String(mqttBridgeConfigured() ? "true" : "false") + ",";
+  json += "\"mqtt_connected\":" + String(mqttConnected ? "true" : "false") + ",";
   json += "\"audio_url\":\"http://";
   String audioHost = currentStaIp() == "not connected" ? currentApIp() : currentStaIp();
   json += audioHost;
@@ -1586,6 +1692,8 @@ static void handleHealth() {
   json += ":" + String(SPEAKER_INPUT_PORT) + "/speaker.ws\",";
   json += "\"relay_host\":\"" + String(RELAY_HOST) + "\",";
   json += "\"relay_device_id\":\"" + String(RELAY_DEVICE_ID) + "\",";
+  json += "\"mqtt_host\":\"" + String(MQTT_BROKER_HOST) + "\",";
+  json += "\"mqtt_device_id\":\"" + String(MQTT_DEVICE_ID) + "\",";
   json += "\"sta_ip\":\"" + currentStaIp() + "\",";
   json += "\"ap_ip\":\"" + currentApIp() + "\",";
   json += "\"psram\":" + String(hasPsramHeap() ? "true" : "false") + ",";
@@ -2237,6 +2345,278 @@ static void startRelayClients() {
   }
 }
 
+static String mqttTopicFor(const char *suffix) {
+  String topic = mqttTopicPrefix;
+  if (!topic.endsWith("/")) {
+    topic += "/";
+  }
+  topic += suffix;
+  return topic;
+}
+
+static bool mqttPublishText(const String &topic, const String &payload, bool retained) {
+  if (!mqttConnected) {
+    return false;
+  }
+  if (!claimMqttClient(500)) {
+    return false;
+  }
+  bool ok = mqttClient.publish(topic.c_str(), payload.c_str(), retained);
+  releaseMqttClient();
+  return ok;
+}
+
+static bool mqttPublishBinary(const String &topic, const uint8_t *payload, size_t payloadLength) {
+  if (!mqttConnected || payload == nullptr || payloadLength == 0) {
+    return false;
+  }
+  if (!claimMqttClient(1000)) {
+    return false;
+  }
+
+  bool ok = mqttClient.beginPublish(topic.c_str(), payloadLength, false);
+  if (ok) {
+    ok = mqttClient.write(payload, payloadLength) == payloadLength;
+  }
+  if (ok) {
+    ok = mqttClient.endPublish();
+  } else {
+    mqttClient.disconnect();
+    mqttConnected = false;
+  }
+  releaseMqttClient();
+  return ok;
+}
+
+static void mqttSendStateLine() {
+  if (!mqttBridgeConfigured() || !mqttConnected) {
+    return;
+  }
+
+  String line;
+  line.reserve(256);
+  line += "state";
+  line += " camera=" + relaySafeValue(cameraStatus);
+  line += " mic=" + relaySafeValue(microphoneStatus);
+  line += " speaker=" + relaySafeValue(speakerStatus);
+  line += " heap=" + String(ESP.getFreeHeap());
+  line += " sta=" + relaySafeValue(currentStaIp());
+  line += " ap=" + relaySafeValue(currentApIp());
+  line += " video=" + String(mqttVideoRequested ? 1 : 0);
+  line += " audio=" + String(mqttAudioRequested ? 1 : 0);
+  line += " audio_ch=" + String(mqttUseRightChannel ? "right" : "left");
+  line += " audio_gain=" + String(mqttAudioGain);
+  line += " audio_shift=" + String(mqttAudioShift);
+  line += " broker=" + relaySafeValue(MQTT_BROKER_HOST);
+  mqttPublishText(mqttStateTopic, line, true);
+}
+
+static void mqttApplySubscription(const String &line) {
+  if (!line.startsWith("sub ")) {
+    return;
+  }
+
+  mqttVideoRequested = relayFieldBool(line, "video", mqttVideoRequested);
+  mqttAudioRequested = relayFieldBool(line, "audio", mqttAudioRequested);
+  mqttUseRightChannel = relayFieldValue(line, "ch", mqttUseRightChannel ? "right" : "left") == "right";
+  mqttAudioGain = relayFieldInt(line, "gain", mqttAudioGain, 1, 16);
+  mqttAudioShift = relayFieldInt(line, "shift", mqttAudioShift, 0, 8);
+  mqttStatus = "mqtt_subscribed";
+  mqttSendStateLine();
+}
+
+static void mqttCallback(char *topic, uint8_t *payload, unsigned int length) {
+  String topicName = topic == nullptr ? "" : String(topic);
+  if (topicName == mqttControlTopic) {
+    String line;
+    line.reserve(length + 1);
+    for (unsigned int i = 0; i < length; i++) {
+      line += static_cast<char>(payload[i]);
+    }
+    line.trim();
+    Serial.print("MQTT control <- ");
+    Serial.println(line);
+    mqttApplySubscription(line);
+    return;
+  }
+
+  if (topicName != mqttSpeakerTopic || length == 0) {
+    return;
+  }
+
+  if (!claimSpeaker(20)) {
+    return;
+  }
+  if (!initSpeaker()) {
+    releaseSpeaker();
+    return;
+  }
+  speakerStatus = "mqtt_talkback";
+  relayWriteSpeakerPcmBytes(payload, length);
+  lastMqttSpeakerChunkMs = millis();
+  releaseSpeaker();
+}
+
+static bool connectMqttBridge() {
+  if (!mqttBridgeConfigured()) {
+    mqttStatus = "disabled";
+    return false;
+  }
+  if (WiFi.status() != WL_CONNECTED) {
+    mqttStatus = "wifi_required";
+    return false;
+  }
+  if (mqttConnected) {
+    return true;
+  }
+
+  unsigned long now = millis();
+  if (lastMqttConnectAttemptMs > 0 && now - lastMqttConnectAttemptMs < MQTT_RECONNECT_INTERVAL_MS) {
+    return false;
+  }
+  lastMqttConnectAttemptMs = now;
+
+  if (!claimMqttClient(1000)) {
+    return false;
+  }
+
+  mqttTransport.stop();
+#if MQTT_ALLOW_INSECURE_TLS
+  mqttTransport.setInsecure();
+#endif
+  mqttClient.setServer(MQTT_BROKER_HOST, MQTT_BROKER_PORT);
+  mqttClient.setCallback(mqttCallback);
+  mqttClient.setKeepAlive(15);
+  mqttClient.setSocketTimeout(4);
+  mqttClient.setBufferSize(32768);
+
+  uint64_t chipId = ESP.getEfuseMac();
+  String clientId = String(MQTT_DEVICE_ID) + "-" + String(static_cast<uint32_t>(chipId & 0xffffffff), HEX);
+  bool connected = mqttClient.connect(clientId.c_str(), mqttPresenceTopic.c_str(), 0, true, "0");
+  if (!connected) {
+    mqttStatus = "mqtt_connect_failed";
+    releaseMqttClient();
+    return false;
+  }
+
+  mqttConnected = true;
+  mqttStatus = "mqtt_connected";
+  mqttClient.subscribe(mqttControlTopic.c_str(), 0);
+  mqttClient.subscribe(mqttSpeakerTopic.c_str(), 0);
+  mqttClient.publish(mqttPresenceTopic.c_str(), "1", true);
+  releaseMqttClient();
+  mqttSendStateLine();
+  Serial.print("MQTT bridge connected: ");
+  Serial.println(MQTT_BROKER_HOST);
+  return true;
+}
+
+static void mqttMediaTask(void *parameter) {
+  (void)parameter;
+
+  int16_t rawSamples[MQTT_AUDIO_FRAMES];
+  int16_t pcmSamples[MQTT_AUDIO_FRAMES];
+  int32_t dcEstimate = 0;
+  unsigned long lastVideoAt = 0;
+
+  for (;;) {
+    bool didWork = false;
+
+    if (mqttBridgeConfigured() && mqttConnected && mqttAudioRequested) {
+      if (microphoneReady || initMicrophone()) {
+        size_t bytesRead = 0;
+        esp_err_t err = readMicrophoneSamples(rawSamples, MQTT_AUDIO_FRAMES, &bytesRead, 120);
+        if (err == ESP_OK && bytesRead > 0) {
+          size_t frameCount = bytesRead / sizeof(rawSamples[0]);
+          if (frameCount > MQTT_AUDIO_FRAMES) {
+            frameCount = MQTT_AUDIO_FRAMES;
+          }
+          convertMicFramesToPcm(rawSamples,
+                                frameCount,
+                                mqttUseRightChannel,
+                                mqttAudioShift,
+                                mqttAudioGain,
+                                dcEstimate,
+                                pcmSamples);
+          if (frameCount > 0) {
+            mqttPublishBinary(mqttAudioTopic,
+                              reinterpret_cast<uint8_t *>(pcmSamples),
+                              frameCount * sizeof(pcmSamples[0]));
+            didWork = true;
+          }
+        }
+      }
+    }
+
+    unsigned long now = millis();
+    if (mqttBridgeConfigured() && mqttConnected && mqttVideoRequested && now - lastVideoAt >= MQTT_VIDEO_INTERVAL_MS) {
+      if (initCamera()) {
+        camera_fb_t *fb = esp_camera_fb_get();
+        lastCameraUseMs = millis();
+        if (fb != nullptr) {
+          uint8_t *jpgBuffer = nullptr;
+          size_t jpgLength = 0;
+          bool mustFree = false;
+          if (frameToJpeg(fb, &jpgBuffer, &jpgLength, &mustFree) && jpgLength > 0) {
+            mqttPublishBinary(mqttVideoTopic, jpgBuffer, jpgLength);
+            didWork = true;
+          }
+          if (mustFree) {
+            free(jpgBuffer);
+          }
+          esp_camera_fb_return(fb);
+        }
+      }
+      lastVideoAt = now;
+    }
+
+    if (!didWork) {
+      vTaskDelay(pdMS_TO_TICKS((mqttConnected && mqttAudioRequested) ? 4 : 25));
+    } else {
+      taskYIELD();
+    }
+  }
+}
+
+static void startMqttBridge() {
+  if (!mqttBridgeConfigured()) {
+    mqttStatus = "disabled";
+    Serial.println("MQTT bridge disabled");
+    return;
+  }
+
+  mqttTopicPrefix = String("mokrenkog/esp32-s3-cam-den/") +
+                    relaySafeValue(MQTT_DEVICE_ID) +
+                    "/" +
+                    relaySafeValue(MQTT_SHARED_KEY);
+  mqttControlTopic = mqttTopicFor("control");
+  mqttVideoTopic = mqttTopicFor("video/jpeg");
+  mqttAudioTopic = mqttTopicFor("audio/pcm");
+  mqttSpeakerTopic = mqttTopicFor("speaker/pcm");
+  mqttStateTopic = mqttTopicFor("state");
+  mqttPresenceTopic = mqttTopicFor("presence");
+  mqttClientMutex = xSemaphoreCreateRecursiveMutex();
+
+  BaseType_t taskStarted = xTaskCreatePinnedToCore(
+      mqttMediaTask,
+      "mqtt_media",
+      12288,
+      nullptr,
+      1,
+      &mqttMediaTaskHandle,
+      1);
+
+  if (taskStarted != pdPASS) {
+    mqttStatus = "mqtt_task_failed";
+    Serial.println("MQTT bridge task failed");
+    return;
+  }
+
+  mqttStatus = "mqtt_ready";
+  Serial.print("MQTT bridge configured: ");
+  Serial.println(MQTT_BROKER_HOST);
+}
+
 static void startWiFi() {
   WiFi.mode(ENABLE_DIRECT_AP ? WIFI_AP_STA : WIFI_STA);
   WiFi.setSleep(false);
@@ -2354,6 +2734,7 @@ void setup() {
   }
   printMicrophoneSelfTest("boot before WiFi/camera");
   startWiFi();
+  startMqttBridge();
   startServer();
   startAudioServer();
   startSpeakerInputServer();
@@ -2370,6 +2751,16 @@ void loop() {
     releaseRelaySocket();
   }
 
+  if (mqttBridgeConfigured()) {
+    if (!mqttClient.connected()) {
+      mqttConnected = false;
+      connectMqttBridge();
+    } else if (claimMqttClient(20)) {
+      mqttClient.loop();
+      releaseMqttClient();
+    }
+  }
+
   unsigned long now = millis();
   if (!KEEP_CAMERA_INITIALIZED && cameraReady && lastCameraUseMs > 0 && now - lastCameraUseMs >= CAMERA_IDLE_STOP_MS) {
     Serial.println("Camera idle timeout");
@@ -2384,17 +2775,25 @@ void loop() {
   if (speakerStatus == "relay_talkback" && lastRelaySpeakerChunkMs > 0 && now - lastRelaySpeakerChunkMs >= 800) {
     speakerStatus = speakerReady ? "ok" : "standby";
   }
+  if (speakerStatus == "mqtt_talkback" && lastMqttSpeakerChunkMs > 0 && now - lastMqttSpeakerChunkMs >= 800) {
+    speakerStatus = speakerReady ? "ok" : "standby";
+  }
+  if (mqttBridgeConfigured() && mqttConnected && now - lastMqttStateMs >= MQTT_STATE_INTERVAL_MS) {
+    lastMqttStateMs = now;
+    mqttSendStateLine();
+  }
 
   if (now - lastHeartbeatMs >= 5000) {
     lastHeartbeatMs = now;
-    Serial.printf("Alive sta=%s ap=%s heap=%u camera=%s mic=%s speaker=%s relay=%s\n",
+    Serial.printf("Alive sta=%s ap=%s heap=%u camera=%s mic=%s speaker=%s relay=%s mqtt=%s\n",
                   currentStaIp().c_str(),
                   currentApIp().c_str(),
                   ESP.getFreeHeap(),
                   cameraStatus.c_str(),
                   microphoneStatus.c_str(),
                   speakerStatus.c_str(),
-                  relayStatus.c_str());
+                  relayStatus.c_str(),
+                  mqttStatus.c_str());
   }
 
   delay(2);

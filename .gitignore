@@ -5,4 +5,5 @@
 .vscode/ipch
 include/wifi_config.h
 include/relay_config.h
+include/mqtt_bridge_config.h
 cloud-relay/.env

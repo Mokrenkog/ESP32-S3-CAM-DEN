@@ -8,34 +8,41 @@ PlatformIO firmware for the board marked `ESP32-S3-SPK` / `N16R8` with an
 - low-latency microphone audio: `ws://<board-ip>:81/audio.ws`
 - browser microphone to board speaker: `ws://<board-ip>:82/speaker.ws`
 - microphone WAV fallback: `http://<board-ip>:81/audio.wav`
-- optional cloud relay mode for GitHub Pages + WSS
+- GitHub Pages cloud mode over MQTT/WSS without a local PC
 - diagnostics: `/health` and `/pins`
 
 ## Project structure
 
 - firmware: this root PlatformIO project
 - GitHub Pages site: `github-pages/`
-- cloud relay server: `cloud-relay/`
+- optional custom relay server: `cloud-relay/`
 
-## Cloud mode architecture
+## Recommended cloud mode
 
-For phone/Chrome microphone capture without a local PC, the browser must run in
-a secure context (`HTTPS`) and talk to the board through a relay:
+The easiest fully autonomous setup is:
 
-1. `ESP32 -> WSS relay`
-2. `GitHub Pages -> WSS relay`
-3. `browser microphone -> WSS relay -> ESP32 speaker`
+1. `ESP32 -> MQTT over TLS -> public broker`
+2. `GitHub Pages -> MQTT over WSS -> public broker`
+3. `browser microphone -> MQTT over WSS -> ESP32 speaker`
 
-This avoids the `http://192.168.x.x` microphone limitation in modern browsers.
+This avoids the `http://192.168.x.x` microphone limitation in modern browsers
+and does not require a local PC or a VPS.
 
-## Enable cloud relay on ESP32
+## Enable MQTT cloud mode on ESP32
 
-1. Copy `include/relay_config.example.h` to `include/relay_config.h`.
+1. Copy `include/mqtt_bridge_config.example.h` to `include/mqtt_bridge_config.h`.
 2. Fill:
-   - `RELAY_HOST`
-   - `RELAY_DEVICE_ID`
-   - `RELAY_DEVICE_TOKEN`
+   - `MQTT_DEVICE_ID`
+   - `MQTT_SHARED_KEY`
 3. Rebuild and upload.
+
+By default the example uses the official public EMQX broker:
+
+- MQTT over TLS: `broker.emqx.io:8883`
+- MQTT over WSS: `wss://broker.emqx.io:8084/mqtt`
+
+Important: this broker is public. Use a long random shared key and do not send
+private data you need to keep secret.
 
 The local AP/router web interface still remains available as a fallback.
 
@@ -133,15 +140,22 @@ This avoids requiring GitHub Actions `workflow` scope on the current token.
 
 After opening the site:
 
-1. enter `Relay URL`
+1. enter `Broker WSS URL`
 2. enter `Device ID`
-3. enter `Viewer token`
+3. enter `Shared key`
 4. press `Connect`
 
 Then:
 
 - `Start A/V` starts board video + board audio
 - `Start talkback` sends phone/PC microphone to the board speaker
+
+The recommended value for `Broker WSS URL` is:
+
+- `wss://broker.emqx.io:8084/mqtt`
+
+The `Device ID` and `Shared key` must match the values in
+`include/mqtt_bridge_config.h` on the board.
 
 ## Optional router Wi-Fi
 
