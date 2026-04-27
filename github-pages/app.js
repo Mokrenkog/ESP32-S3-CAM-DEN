@@ -1,4 +1,13 @@
-const SETTINGS_KEY = "esp32-s3-cam-den-hybrid-settings";
+const SETTINGS = {
+  brokerUrl: "wss://rfaa3fd6.ala.eu-central-1.emqxsl.com:8084/mqtt",
+  brokerUsername: "web-viewer",
+  brokerPassword: "web-viewer",
+  relayUrl: "https://esp32-s3-cam-den-relay.onrender.com",
+  viewerToken: "esp32-viewer-token-2026-04-26-q5n8r3t1z6",
+  deviceId: "esp32-s3-cam-den-01",
+  sharedKey: "esp32-cam-den-private-2026-04-26-x7m9k2p4q8",
+};
+
 const AUDIO_SAMPLE_RATE = 16000;
 const VIDEO_PACKET = 1;
 const AUDIO_PACKET = 2;
@@ -8,39 +17,12 @@ const AUDIO_RESET_SECONDS = 0.08;
 const MEDIA_RECONNECT_MS = 3000;
 
 const elements = {
-  brokerUrl: document.getElementById("broker-url"),
-  brokerUsername: document.getElementById("broker-username"),
-  brokerPassword: document.getElementById("broker-password"),
-  relayUrl: document.getElementById("relay-url"),
-  viewerToken: document.getElementById("viewer-token"),
-  deviceId: document.getElementById("device-id"),
-  sharedKey: document.getElementById("shared-key"),
-  saveSettings: document.getElementById("save-settings"),
-  connect: document.getElementById("connect-btn"),
-  disconnect: document.getElementById("disconnect-btn"),
   notice: document.getElementById("notice"),
-  startAv: document.getElementById("start-av"),
-  videoOnly: document.getElementById("video-only"),
-  audioStop: document.getElementById("audio-stop"),
-  audioLeft: document.getElementById("audio-left"),
-  audioRight: document.getElementById("audio-right"),
-  audioLouder: document.getElementById("audio-louder"),
-  audioQuieter: document.getElementById("audio-quieter"),
-  talkbackStart: document.getElementById("talkback-start"),
-  talkbackLouder: document.getElementById("talkback-louder"),
-  talkbackStop: document.getElementById("talkback-stop"),
   connectionPill: document.getElementById("connection-pill"),
   deviceState: document.getElementById("device-state"),
-  talkbackState: document.getElementById("talkback-state"),
   video: document.getElementById("video"),
-  log: document.getElementById("log"),
-  cameraStatus: document.getElementById("camera-status"),
-  micStatus: document.getElementById("mic-status"),
-  speakerStatus: document.getElementById("speaker-status"),
-  heapStatus: document.getElementById("heap-status"),
-  staStatus: document.getElementById("sta-status"),
-  apStatus: document.getElementById("ap-status"),
-  brokerStatus: document.getElementById("broker-status"),
+  talkbackToggle: document.getElementById("talkback-toggle"),
+  talkbackState: document.getElementById("talkback-state"),
 };
 
 const state = {
@@ -50,10 +32,16 @@ const state = {
   audioCtx: null,
   nextAudioTime: 0,
   imageUrl: null,
+  desiredConnection: false,
+  currentSettings: SETTINGS,
+  mediaReconnectTimer: null,
+  boardPresenceSeen: false,
+  boardPresenceTimer: null,
+  topics: null,
   subscription: {
     video: true,
     audio: true,
-    channel: "left",
+    channel: "right",
     gain: 4,
     shift: 0,
   },
@@ -63,18 +51,7 @@ const state = {
   talkbackSink: null,
   talkbackGain: 2,
   talkbackRestoreAudio: null,
-  topics: null,
-  boardPresenceSeen: false,
-  boardPresenceTimer: null,
-  desiredConnection: false,
-  mediaReconnectTimer: null,
-  currentSettings: null,
 };
-
-function log(message) {
-  const stamp = new Date().toLocaleTimeString();
-  elements.log.textContent = `[${stamp}] ${message}\n${elements.log.textContent}`.trim();
-}
 
 function setNotice(text, kind = "info") {
   elements.notice.textContent = text;
@@ -85,65 +62,18 @@ function setConnectionPill() {
   const brokerConnected = Boolean(state.mqtt?.connected);
   const mediaConnected = Boolean(state.mediaWs && state.mediaWs.readyState === WebSocket.OPEN);
   if (state.boardPresenceSeen && brokerConnected && mediaConnected) {
-    elements.connectionPill.textContent = "device online";
+    elements.connectionPill.textContent = "online";
     return;
   }
   if (brokerConnected && mediaConnected) {
-    elements.connectionPill.textContent = "broker+media";
+    elements.connectionPill.textContent = "connecting";
     return;
   }
-  if (brokerConnected) {
-    elements.connectionPill.textContent = "broker only";
-    return;
-  }
-  if (mediaConnected) {
-    elements.connectionPill.textContent = "media only";
+  if (brokerConnected || mediaConnected) {
+    elements.connectionPill.textContent = "loading";
     return;
   }
   elements.connectionPill.textContent = "offline";
-}
-
-function getSettings() {
-  try {
-    return JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}");
-  } catch {
-    return {};
-  }
-}
-
-function saveSettings() {
-  const settings = {
-    brokerUrl: elements.brokerUrl.value.trim(),
-    brokerUsername: elements.brokerUsername.value.trim(),
-    brokerPassword: elements.brokerPassword.value,
-    relayUrl: elements.relayUrl.value.trim(),
-    viewerToken: elements.viewerToken.value.trim(),
-    deviceId: elements.deviceId.value.trim(),
-    sharedKey: elements.sharedKey.value.trim(),
-  };
-  localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
-  log("Settings saved");
-  return settings;
-}
-
-function loadSettings() {
-  const settings = getSettings();
-  elements.brokerUrl.value = settings.brokerUrl || "wss://broker.emqx.io:8084/mqtt";
-  elements.brokerUsername.value = settings.brokerUsername || "";
-  elements.brokerPassword.value = settings.brokerPassword || "";
-  elements.relayUrl.value = settings.relayUrl || "";
-  elements.viewerToken.value = settings.viewerToken || "";
-  elements.deviceId.value = settings.deviceId || "esp32-s3-cam-den-01";
-  elements.sharedKey.value = settings.sharedKey || "";
-}
-
-function requireSettings() {
-  const settings = saveSettings();
-  if (!settings.brokerUrl || !settings.relayUrl || !settings.viewerToken || !settings.deviceId || !settings.sharedKey) {
-    setNotice("Fill Broker WSS URL, Relay HTTPS URL, Viewer token, Device ID and Shared key before connecting.", "error");
-    throw new Error("Missing broker/relay settings");
-  }
-  return settings;
 }
 
 function topicPrefix(settings) {
@@ -172,7 +102,7 @@ function buildRelayWsUrl(kind, settings) {
 function ensureAudioContext() {
   const AudioContextClass = window.AudioContext || window.webkitAudioContext;
   if (!AudioContextClass) {
-    throw new Error("WebAudio not supported in this browser");
+    throw new Error("WebAudio не підтримується в цьому браузері");
   }
   if (!state.audioCtx) {
     try {
@@ -206,7 +136,7 @@ function resetAudioQueue() {
 
 function schedulePcm16(arrayBuffer) {
   const ctx = state.audioCtx;
-  if (!ctx) {
+  if (!ctx || ctx.state !== "running") {
     return;
   }
 
@@ -251,33 +181,12 @@ function parseKvLine(line) {
 }
 
 function markBoardOnline() {
-  const firstPresence = !state.boardPresenceSeen;
   state.boardPresenceSeen = true;
-  setConnectionPill();
   if (state.boardPresenceTimer) {
     clearTimeout(state.boardPresenceTimer);
     state.boardPresenceTimer = null;
   }
-  if (firstPresence) {
-    setNotice("Broker connected and ESP32 is online.", "info");
-  }
-}
-
-function updateDeviceState(line) {
-  const parsed = parseKvLine(line);
-  if (parsed._type !== "state") {
-    return;
-  }
-
-  markBoardOnline();
-  elements.cameraStatus.textContent = parsed.camera || "-";
-  elements.micStatus.textContent = parsed.mic || "-";
-  elements.speakerStatus.textContent = parsed.speaker || "-";
-  elements.heapStatus.textContent = parsed.heap || "-";
-  elements.staStatus.textContent = parsed.sta || "-";
-  elements.apStatus.textContent = parsed.ap || "-";
-  elements.brokerStatus.textContent = parsed.broker || "-";
-  elements.deviceState.textContent = `camera=${parsed.camera || "-"} mic=${parsed.mic || "-"} speaker=${parsed.speaker || "-"}`;
+  setConnectionPill();
 }
 
 function publishControl() {
@@ -287,7 +196,6 @@ function publishControl() {
   const sub = state.subscription;
   const line = `sub video=${sub.video ? 1 : 0} audio=${sub.audio ? 1 : 0} ch=${sub.channel} gain=${sub.gain} shift=${sub.shift}`;
   state.mqtt.publish(state.topics.control, line, { qos: 0, retain: true });
-  log(`-> ${line}`);
 }
 
 function handleMqttMessage(topic, payload) {
@@ -297,19 +205,19 @@ function handleMqttMessage(topic, payload) {
 
   if (topic === state.topics.state) {
     const line = new TextDecoder().decode(payload);
-    updateDeviceState(line);
-    log(`< - ${line}`);
+    const parsed = parseKvLine(line);
+    if (parsed._type === "state") {
+      markBoardOnline();
+      elements.deviceState.textContent = `camera=${parsed.camera || "-"} mic=${parsed.mic || "-"} speaker=${parsed.speaker || "-"}`;
+      setNotice("Відео і звук з плати підключені.", "info");
+    }
     return;
   }
 
   if (topic === state.topics.presence) {
-    const presence = new TextDecoder().decode(payload).trim();
-    if (presence === "1") {
+    const parsed = parseKvLine(new TextDecoder().decode(payload));
+    if (parsed.device === "1") {
       markBoardOnline();
-    } else {
-      state.boardPresenceSeen = false;
-      setConnectionPill();
-      setNotice("Broker connected, but ESP32 is offline or uses another shared key.", "warn");
     }
   }
 }
@@ -332,7 +240,7 @@ function clearMediaReconnect() {
 }
 
 function scheduleMediaReconnect() {
-  if (!state.desiredConnection || state.mediaReconnectTimer || !state.currentSettings) {
+  if (!state.desiredConnection || state.mediaReconnectTimer) {
     return;
   }
   state.mediaReconnectTimer = setTimeout(() => {
@@ -386,8 +294,6 @@ function connectMediaSocket(settings) {
       return;
     }
     setConnectionPill();
-    log(`Connected relay media ${mediaUrl}`);
-    setNotice("Broker control/state connected. Relay media channel is live.", "info");
   };
 
   mediaWs.onmessage = handleRelayMediaMessage;
@@ -396,9 +302,8 @@ function connectMediaSocket(settings) {
     if (state.mediaWs === mediaWs) {
       state.mediaWs = null;
       setConnectionPill();
-      log("Relay media socket closed");
       if (state.desiredConnection) {
-        setNotice("Relay media channel disconnected. Reconnecting...", "warn");
+        setNotice("Канал медіа перепідключається...", "warn");
         scheduleMediaReconnect();
       }
     }
@@ -406,7 +311,7 @@ function connectMediaSocket(settings) {
 
   mediaWs.onerror = () => {
     if (state.mediaWs === mediaWs) {
-      log("Relay media socket error");
+      setNotice("Помилка каналу медіа. Йде повторне підключення...", "warn");
     }
   };
 }
@@ -431,41 +336,34 @@ function connectMqtt(settings) {
 
   state.mqtt.on("connect", () => {
     setConnectionPill();
-    setNotice("Broker connected. Waiting for the ESP32 state and relay media...", "info");
-    log(`Connected to ${settings.brokerUrl}`);
-    state.mqtt.subscribe(
-      [state.topics.state, state.topics.presence],
-      { qos: 0 },
-      (error) => {
-        if (error) {
-          setNotice(`Subscribe error: ${error.message}`, "error");
-          log(`Subscribe error: ${error.message}`);
-          return;
-        }
-        publishControl();
-        state.boardPresenceTimer = setTimeout(() => {
-          if (!state.boardPresenceSeen) {
-            setNotice("Broker connected, but the board did not appear. Most often this means the ESP32 is offline, uses another shared key, or is not on the expected firmware.", "warn");
-          }
-        }, 6000);
+    setNotice("Канал керування підключено. Чекаємо плату...", "info");
+    state.mqtt.subscribe([state.topics.state, state.topics.presence], { qos: 0 }, (error) => {
+      if (error) {
+        setNotice(`Помилка підписки MQTT: ${error.message}`, "error");
+        return;
       }
-    );
+      publishControl();
+      state.boardPresenceTimer = setTimeout(() => {
+        if (!state.boardPresenceSeen) {
+          setNotice("Плата ще не відгукнулась. Якщо зв’язок щойно піднявся, це може зайняти кілька секунд.", "warn");
+        }
+      }, 6000);
+    });
   });
 
   state.mqtt.on("message", handleMqttMessage);
   state.mqtt.on("reconnect", () => {
     setConnectionPill();
-    setNotice("Reconnecting to MQTT broker...", "warn");
+    setNotice("MQTT перепідключається...", "warn");
   });
   state.mqtt.on("close", () => {
     setConnectionPill();
     if (state.desiredConnection) {
-      setNotice("Disconnected from MQTT broker. Waiting for reconnect...", "warn");
+      setNotice("MQTT тимчасово відключився. Чекаємо перепідключення...", "warn");
     }
   });
   state.mqtt.on("error", (error) => {
-    setNotice(`MQTT error: ${error.message}`, "error");
-    log(`MQTT error: ${error.message}`);
+    setNotice(`Помилка MQTT: ${error.message}`, "error");
   });
 }
 
@@ -489,6 +387,11 @@ function stopTalkbackInternals() {
   }
 }
 
+function updateTalkbackUi(active) {
+  elements.talkbackToggle.textContent = active ? "Вимкнути мікрофон" : "Увімкнути мікрофон";
+  elements.talkbackState.textContent = active ? "мікрофон увімкнено" : "вимкнено";
+}
+
 function stopTalkback() {
   const restoreAudio = state.talkbackRestoreAudio;
   closeSocket(state.speakerWs);
@@ -500,8 +403,8 @@ function stopTalkback() {
     resetAudioQueue();
     publishControl();
   }
-  elements.talkbackState.textContent = "idle";
-  setNotice("Talkback stopped.", "info");
+  updateTalkbackUi(false);
+  setNotice("Мікрофон вимкнено.", "info");
 }
 
 function downsampleToInt16(input, inputRate, targetRate, gain = 1) {
@@ -531,9 +434,9 @@ function downsampleToInt16(input, inputRate, targetRate, gain = 1) {
   return pcm;
 }
 
-async function startTalkback(gain) {
+async function startTalkback() {
   if (!state.desiredConnection || !state.currentSettings) {
-    throw new Error("Connect first");
+    throw new Error("Сторінка ще не підключилась до плати");
   }
 
   const ctx = await unlockAudio();
@@ -561,7 +464,6 @@ async function startTalkback(gain) {
     throw error;
   }
 
-  state.talkbackGain = gain;
   const speakerUrl = buildRelayWsUrl("speaker", settings);
   const speakerWs = new WebSocket(speakerUrl);
   speakerWs.binaryType = "arraybuffer";
@@ -593,9 +495,8 @@ async function startTalkback(gain) {
     state.talkbackSource.connect(state.talkbackProcessor);
     state.talkbackProcessor.connect(state.talkbackSink);
     state.talkbackSink.connect(ctx.destination);
-    elements.talkbackState.textContent = `active x${gain}`;
-    setNotice("Talkback started. Board playback is muted while you speak to avoid echo.", "info");
-    log(`Talkback started via ${speakerUrl}`);
+    updateTalkbackUi(true);
+    setNotice("Мікрофон увімкнено. Звук з плати тимчасово приглушений, щоб не було луни.", "info");
   };
 
   speakerWs.onclose = () => {
@@ -608,22 +509,19 @@ async function startTalkback(gain) {
         resetAudioQueue();
         publishControl();
       }
-      elements.talkbackState.textContent = "idle";
-      log("Talkback socket closed");
+      updateTalkbackUi(false);
     }
   };
 
   speakerWs.onerror = () => {
     if (state.speakerWs === speakerWs) {
-      setNotice("Talkback socket error.", "error");
-      log("Talkback socket error");
+      setNotice("Помилка каналу мікрофона.", "error");
     }
   };
 }
 
 function disconnect() {
   state.desiredConnection = false;
-  state.currentSettings = null;
   clearMediaReconnect();
   closeSocket(state.mediaWs);
   state.mediaWs = null;
@@ -643,95 +541,49 @@ function disconnect() {
   }
   clearImage();
   resetAudioQueue();
-  elements.deviceState.textContent = "waiting for control/state...";
   setConnectionPill();
-  setNotice("Disconnected. Reconnect both MQTT and relay when ready.", "info");
 }
 
 async function connect() {
-  const settings = requireSettings();
-  await unlockAudio();
-  disconnect();
+  try {
+    await unlockAudio();
+  } catch {
+  }
 
+  disconnect();
   state.desiredConnection = true;
-  state.currentSettings = settings;
-  connectMqtt(settings);
-  connectMediaSocket(settings);
+  connectMqtt(state.currentSettings);
+  connectMediaSocket(state.currentSettings);
 }
 
 function bindEvents() {
-  elements.saveSettings.addEventListener("click", saveSettings);
-  elements.connect.addEventListener("click", () => connect().catch((error) => {
-    setNotice(error.message, "error");
-    log(error.message);
-  }));
-  elements.disconnect.addEventListener("click", disconnect);
-
-  elements.startAv.addEventListener("click", () => {
-    state.subscription.video = true;
-    state.subscription.audio = true;
-    resetAudioQueue();
-    publishControl();
-  });
-
-  elements.videoOnly.addEventListener("click", () => {
-    state.subscription.video = true;
-    state.subscription.audio = false;
-    resetAudioQueue();
-    publishControl();
-  });
-
-  elements.audioStop.addEventListener("click", () => {
-    state.subscription.audio = false;
-    resetAudioQueue();
-    publishControl();
-  });
-
-  elements.audioLeft.addEventListener("click", () => {
-    state.subscription.audio = true;
-    state.subscription.channel = "left";
-    resetAudioQueue();
-    publishControl();
-  });
-
-  elements.audioRight.addEventListener("click", () => {
-    state.subscription.audio = true;
-    state.subscription.channel = "right";
-    resetAudioQueue();
-    publishControl();
-  });
-
-  elements.audioLouder.addEventListener("click", () => {
-    state.subscription.audio = true;
-    state.subscription.gain = Math.min(8, state.subscription.gain + 1);
-    publishControl();
-  });
-
-  elements.audioQuieter.addEventListener("click", () => {
-    state.subscription.audio = true;
-    state.subscription.gain = Math.max(1, state.subscription.gain - 1);
-    publishControl();
-  });
-
-  elements.talkbackStart.addEventListener("click", () => {
-    startTalkback(2).catch((error) => {
-      elements.talkbackState.textContent = "failed";
+  elements.talkbackToggle.addEventListener("click", () => {
+    if (state.speakerWs) {
+      stopTalkback();
+      return;
+    }
+    startTalkback().catch((error) => {
+      updateTalkbackUi(false);
       setNotice(error.message, "error");
-      log(error.message);
     });
   });
 
-  elements.talkbackLouder.addEventListener("click", () => {
-    startTalkback(4).catch((error) => {
-      elements.talkbackState.textContent = "failed";
-      setNotice(error.message, "error");
-      log(error.message);
-    });
-  });
+  const unlockHandler = () => {
+    unlockAudio()
+      .then(() => {
+        if (state.boardPresenceSeen) {
+          setNotice("Звук увімкнено.", "info");
+        }
+      })
+      .catch(() => {
+      });
+  };
 
-  elements.talkbackStop.addEventListener("click", stopTalkback);
+  window.addEventListener("pointerdown", unlockHandler, { passive: true });
+  window.addEventListener("keydown", unlockHandler, { passive: true });
   window.addEventListener("beforeunload", disconnect);
 }
 
-loadSettings();
 bindEvents();
+updateTalkbackUi(false);
+connect();
