@@ -97,6 +97,10 @@
 #define RELAY_RECONNECT_INTERVAL_MS 5000
 #endif
 
+#ifndef RELAY_INTERCOM_ENABLED
+#define RELAY_INTERCOM_ENABLED 0
+#endif
+
 #ifndef MQTT_BRIDGE_ENABLED
 #define MQTT_BRIDGE_ENABLED 0
 #endif
@@ -266,6 +270,7 @@ static bool mqttTalkbackActive();
 static bool mqttHasBrokerCredentials();
 static bool relayTalkbackActive();
 static bool hybridCloudMode();
+static bool relayIntercomEnabled();
 
 static bool relayConfigured() {
   return RELAY_ENABLED &&
@@ -285,6 +290,10 @@ static bool mqttBridgeConfigured() {
 
 static bool hybridCloudMode() {
   return relayConfigured() && mqttBridgeConfigured();
+}
+
+static bool relayIntercomEnabled() {
+  return relayConfigured() && RELAY_INTERCOM_ENABLED;
 }
 
 static bool claimRelaySocket(uint32_t timeoutMs = 100) {
@@ -2251,6 +2260,25 @@ static void relayMediaSocketEvent(WStype_t type, uint8_t *payload, size_t length
         Serial.println("Relay media error");
       }
       break;
+    case WStype_BIN:
+      if (payload == nullptr || length < 2) {
+        break;
+      }
+      if (payload[0] != RELAY_PACKET_AUDIO_PCM) {
+        break;
+      }
+      if (!claimSpeaker(10)) {
+        return;
+      }
+      if (!initSpeaker()) {
+        releaseSpeaker();
+        return;
+      }
+      speakerStatus = "relay_peer_audio";
+      relayWriteSpeakerPcmBytes(payload + 1, length - 1);
+      lastRelaySpeakerChunkMs = millis();
+      releaseSpeaker();
+      break;
     default:
       break;
   }
@@ -2308,6 +2336,9 @@ static void relayMediaTask(void *parameter) {
     bool didWork = false;
     bool videoRequested = hybridCloudMode() ? mqttVideoRequested : relayVideoRequested;
     bool audioRequested = hybridCloudMode() ? mqttAudioRequested : relayAudioRequested;
+    if (relayIntercomEnabled()) {
+      audioRequested = true;
+    }
     bool useRightChannel = hybridCloudMode() ? mqttUseRightChannel : relayUseRightChannel;
     int audioShift = hybridCloudMode() ? mqttAudioShift : relayAudioShift;
     int audioGain = hybridCloudMode() ? mqttAudioGain : relayAudioGain;
@@ -2922,6 +2953,9 @@ void loop() {
   }
 
   if (speakerStatus == "relay_talkback" && lastRelaySpeakerChunkMs > 0 && now - lastRelaySpeakerChunkMs >= 800) {
+    speakerStatus = speakerReady ? "ok" : "standby";
+  }
+  if (speakerStatus == "relay_peer_audio" && lastRelaySpeakerChunkMs > 0 && now - lastRelaySpeakerChunkMs >= 800) {
     speakerStatus = speakerReady ? "ok" : "standby";
   }
   if (speakerStatus == "mqtt_talkback" && lastMqttSpeakerChunkMs > 0 && now - lastMqttSpeakerChunkMs >= 800) {

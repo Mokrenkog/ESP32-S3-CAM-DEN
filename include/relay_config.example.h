@@ -25,6 +25,9 @@
 #define RELAY_DEVICE_ID "esp32-s3-cam-den-01"
 #define RELAY_DEVICE_TOKEN "replace-with-long-random-device-token"
 
+// Optional always-on board-to-board audio bridge through relay media.
+#define RELAY_INTERCOM_ENABLED 0
+
 // Cloud stream tuning.
 #define RELAY_FRAME_INTERVAL_MS 160
 #define RELAY_STATE_INTERVAL_MS 10000

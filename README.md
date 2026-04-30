@@ -61,6 +61,24 @@ In the hybrid mode, the board uses:
 - MQTT only for `control` and `state`
 - relay `media` socket for board video/audio
 - relay `speaker` socket for browser talkback
+- if `RELAY_INTERCOM_ENABLED=1`, microphone audio is also sent continuously so
+  the relay can forward it to a paired board speaker
+
+## Board-to-board audio pair
+
+The current setup can also work as a direct audio bridge with the second board
+project in `E:\ESP32_SOUND_KOS`.
+
+- board #1 device id: `esp32-s3-cam-den-01`
+- board #2 device id: `esp32-sound-kos-01`
+
+The relay forwards `audio/pcm` from each board to the peer board over the same
+`media` WebSocket. This gives:
+
+- microphone of board #1 -> speaker of board #2
+- microphone of board #2 -> speaker of board #1
+
+This board-to-board path does not require the browser page.
 
 ## Build and upload
 

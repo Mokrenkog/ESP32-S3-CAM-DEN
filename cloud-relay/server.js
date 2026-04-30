@@ -3,9 +3,25 @@ const WebSocket = require("ws");
 
 const PORT = Number(process.env.PORT || 8080);
 
+const DEFAULT_SECOND_DEVICE = {
+  id: "esp32-sound-kos-01",
+  deviceToken: "esp32-sound-kos-device-token-2026-04-30-b7r4m2q9",
+  viewerToken: "esp32-sound-kos-viewer-token-2026-04-30-v6p3t8n1",
+  peerId: "esp32-s3-cam-den-01",
+};
+
+function normalizeDeviceConfig(item) {
+  return {
+    id: String(item.id || "").trim(),
+    deviceToken: String(item.deviceToken || "").trim(),
+    viewerToken: String(item.viewerToken || "").trim(),
+    peerId: String(item.peerId || "").trim(),
+  };
+}
+
 function loadDeviceConfigs() {
   if (process.env.DEVICES_JSON) {
-    const parsed = JSON.parse(process.env.DEVICES_JSON);
+    const parsed = JSON.parse(process.env.DEVICES_JSON).map(normalizeDeviceConfig);
     if (!Array.isArray(parsed) || parsed.length === 0) {
       throw new Error("DEVICES_JSON must be a non-empty array");
     }
@@ -13,11 +29,32 @@ function loadDeviceConfigs() {
   }
 
   if (process.env.DEVICE_ID && process.env.DEVICE_TOKEN && process.env.VIEWER_TOKEN) {
-    return [{
+    const primary = normalizeDeviceConfig({
       id: process.env.DEVICE_ID,
       deviceToken: process.env.DEVICE_TOKEN,
       viewerToken: process.env.VIEWER_TOKEN,
-    }];
+      peerId: process.env.DEVICE_PEER_ID,
+    });
+
+    const second = normalizeDeviceConfig({
+      id: process.env.SECOND_DEVICE_ID || DEFAULT_SECOND_DEVICE.id,
+      deviceToken: process.env.SECOND_DEVICE_TOKEN || DEFAULT_SECOND_DEVICE.deviceToken,
+      viewerToken: process.env.SECOND_VIEWER_TOKEN || DEFAULT_SECOND_DEVICE.viewerToken,
+      peerId: process.env.SECOND_DEVICE_PEER_ID || DEFAULT_SECOND_DEVICE.peerId,
+    });
+
+    if (!primary.peerId && second.id) {
+      primary.peerId = second.id;
+    }
+
+    const configs = [primary];
+    if (second.id && second.deviceToken && second.viewerToken && second.id !== primary.id) {
+      if (!second.peerId) {
+        second.peerId = primary.id;
+      }
+      configs.push(second);
+    }
+    return configs;
   }
 
   throw new Error("Set DEVICES_JSON or DEVICE_ID/DEVICE_TOKEN/VIEWER_TOKEN");
@@ -104,6 +141,13 @@ function deviceOnline(state) {
     (state.deviceMedia && state.deviceMedia.readyState === WebSocket.OPEN) ||
     (state.deviceSpeaker && state.deviceSpeaker.readyState === WebSocket.OPEN)
   );
+}
+
+function peerDeviceState(config) {
+  if (!config || !config.peerId || config.peerId === config.id) {
+    return null;
+  }
+  return getDeviceState(config.peerId);
 }
 
 function presenceLine(state) {
@@ -265,6 +309,14 @@ wss.on("connection", (ws) => {
       }
       if (kind === "media" && isBinary) {
         broadcast(state.browserMedia, data, true);
+        const peerState = peerDeviceState(configs.get(deviceId));
+        if (peerState &&
+            data.length > 1 &&
+            data[0] === 2 &&
+            peerState.deviceMedia &&
+            peerState.deviceMedia.readyState === WebSocket.OPEN) {
+          peerState.deviceMedia.send(data, { binary: true });
+        }
         return;
       }
       return;
