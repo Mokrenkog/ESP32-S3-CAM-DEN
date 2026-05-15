@@ -83,6 +83,11 @@ local proxy, and opens a public URL like:
 https://random-name.ngrok-free.app/?token=esp32-12345-12345-12345
 ```
 
+If ngrok reports `ERR_NGROK_334`, an old ngrok tunnel is still online. The BAT
+script now tries to stop old local `ngrok.exe` processes automatically before
+starting a new tunnel. If the error remains, close old terminal windows or stop
+the endpoint from the ngrok dashboard.
+
 If no ngrok token is provided, the script tries Cloudflare Tunnel. If
 Cloudflare times out, it tries a `localtunnel` fallback through `npx`.
 

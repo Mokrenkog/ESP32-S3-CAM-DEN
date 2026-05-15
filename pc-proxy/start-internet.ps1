@@ -35,6 +35,23 @@ function Ensure-Ngrok {
   return $ngrokExe
 }
 
+function Stop-ExistingNgrokProcesses {
+  $existing = Get-Process -Name "ngrok" -ErrorAction SilentlyContinue
+  if (-not $existing) {
+    return
+  }
+
+  Write-Host "Stopping previous ngrok processes..."
+  foreach ($process in $existing) {
+    try {
+      Stop-Process -Id $process.Id -Force -ErrorAction Stop
+    } catch {
+      Write-Host "Could not stop ngrok PID $($process.Id): $($_.Exception.Message)"
+    }
+  }
+  Start-Sleep -Seconds 3
+}
+
 function Write-LogLine {
   param([string]$Line)
   if ([string]::IsNullOrWhiteSpace($Line)) {
@@ -164,6 +181,7 @@ try {
   if ($env:NGROK_AUTHTOKEN) {
     Write-Host "Trying ngrok first..."
     $ngrokExe = Ensure-Ngrok
+    Stop-ExistingNgrokProcesses
     & $ngrokExe config add-authtoken $env:NGROK_AUTHTOKEN | ForEach-Object { Write-LogLine $_ }
 
     $activeTunnel = Start-TunnelProcess `
