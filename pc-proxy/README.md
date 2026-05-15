@@ -71,8 +71,10 @@ y
 ```
 
 The script downloads `cloudflared.exe` into `pc-proxy\tools` if needed, starts
-the local proxy, waits for Cloudflare to create the real public URL, and opens
-it automatically. The URL will look similar to:
+the local proxy, and tries Cloudflare Tunnel first. If Cloudflare times out, it
+tries a `localtunnel` fallback through `npx`.
+
+The script opens the real public URL automatically. It will look similar to:
 
 ```text
 https://random-words.trycloudflare.com/?token=esp32-12345-12345-12345
@@ -80,6 +82,12 @@ https://random-words.trycloudflare.com/?token=esp32-12345-12345-12345
 
 Use the exact URL printed by the script. Do not use `example.trycloudflare.com`;
 that is only a placeholder.
+
+If Cloudflare is blocked in the current network, the fallback URL may look like:
+
+```text
+https://random-name.loca.lt/?token=esp32-12345-12345-12345
+```
 
 Keep the BAT window open while streaming.
 

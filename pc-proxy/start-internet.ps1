@@ -8,88 +8,100 @@ $ErrorActionPreference = "Stop"
 $proxyPort = if ($env:PROXY_PORT) { $env:PROXY_PORT } else { "8080" }
 $localUrl = "http://localhost:$proxyPort"
 $token = if ($env:PROXY_TOKEN) { $env:PROXY_TOKEN } else { "" }
-$logPath = Join-Path $PSScriptRoot "cloudflared-last.log"
+$logPath = Join-Path $PSScriptRoot "internet-tunnel-last.log"
 
-function Append-CloudflaredLog {
+function Write-LogLine {
   param([string]$Line)
   if ([string]::IsNullOrWhiteSpace($Line)) {
     return
   }
   Add-Content -LiteralPath $logPath -Value $Line
   Write-Host $Line
-  $match = [regex]::Match($Line, "https://[-a-zA-Z0-9]+\.trycloudflare\.com")
-  if ($match.Success -and -not $script:PublicUrl) {
-    $script:PublicUrl = $match.Value
+}
+
+function Stop-TunnelProcess {
+  param($Tunnel)
+  if ($Tunnel -and $Tunnel.Process -and -not $Tunnel.Process.HasExited) {
+    Stop-Process -Id $Tunnel.Process.Id -Force -ErrorAction SilentlyContinue
+  }
+  if ($Tunnel -and $Tunnel.OutputEvent) {
+    Unregister-Event -SubscriptionId $Tunnel.OutputEvent.Id -ErrorAction SilentlyContinue
+  }
+  if ($Tunnel -and $Tunnel.ErrorEvent) {
+    Unregister-Event -SubscriptionId $Tunnel.ErrorEvent.Id -ErrorAction SilentlyContinue
   }
 }
 
-$script:PublicUrl = $null
-
-Write-Host "Starting local PC proxy on $localUrl ..."
-$node = Start-Process -FilePath "node" `
-  -ArgumentList "server.js" `
-  -WorkingDirectory $PSScriptRoot `
-  -WindowStyle Minimized `
-  -PassThru
-
-try {
-  Start-Sleep -Seconds 2
-
-  if (Test-Path -LiteralPath $logPath) {
-    Remove-Item -LiteralPath $logPath -Force
-  }
-  New-Item -Path $logPath -ItemType File -Force | Out-Null
+function Start-TunnelProcess {
+  param(
+    [string]$Name,
+    [string]$FileName,
+    [string]$Arguments,
+    [string]$UrlRegex,
+    [int]$TimeoutSeconds
+  )
 
   Write-Host ""
-  Write-Host "Starting Cloudflare Tunnel..."
-  Write-Host "Using HTTP/2 protocol because it works on more networks than QUIC."
-  Write-Host "Waiting for the real public URL..."
+  Write-Host "Starting $Name..."
   Write-Host ""
 
   $psi = New-Object System.Diagnostics.ProcessStartInfo
-  $psi.FileName = $CloudflaredPath
+  $psi.FileName = $FileName
+  $psi.Arguments = $Arguments
   $psi.WorkingDirectory = $PSScriptRoot
   $psi.UseShellExecute = $false
   $psi.RedirectStandardOutput = $true
   $psi.RedirectStandardError = $true
   $psi.CreateNoWindow = $true
-  $psi.Arguments = "tunnel --no-autoupdate --protocol http2 --url $localUrl --loglevel info"
 
-  $cloudflared = New-Object System.Diagnostics.Process
-  $cloudflared.StartInfo = $psi
+  $process = New-Object System.Diagnostics.Process
+  $process.StartInfo = $psi
 
-  $outputHandler = {
+  $handler = {
     if ($EventArgs.Data) {
-      Append-CloudflaredLog $EventArgs.Data
-    }
-  }
-  $errorHandler = {
-    if ($EventArgs.Data) {
-      Append-CloudflaredLog $EventArgs.Data
+      Add-Content -LiteralPath $Event.MessageData.LogPath -Value $EventArgs.Data
+      Write-Host $EventArgs.Data
     }
   }
 
-  $outEvent = Register-ObjectEvent -InputObject $cloudflared -EventName OutputDataReceived -Action $outputHandler
-  $errEvent = Register-ObjectEvent -InputObject $cloudflared -EventName ErrorDataReceived -Action $errorHandler
+  $outEvent = Register-ObjectEvent -InputObject $process -EventName OutputDataReceived -MessageData @{ LogPath = $logPath } -Action $handler
+  $errEvent = Register-ObjectEvent -InputObject $process -EventName ErrorDataReceived -MessageData @{ LogPath = $logPath } -Action $handler
 
-  if (-not $cloudflared.Start()) {
-    throw "Could not start cloudflared."
+  if (-not $process.Start()) {
+    throw "Could not start $Name."
   }
-  $cloudflared.BeginOutputReadLine()
-  $cloudflared.BeginErrorReadLine()
+  $process.BeginOutputReadLine()
+  $process.BeginErrorReadLine()
 
-  for ($i = 0; $i -lt 90 -and -not $script:PublicUrl; $i++) {
+  $publicUrl = $null
+  for ($i = 0; $i -lt $TimeoutSeconds -and -not $publicUrl; $i++) {
     Start-Sleep -Seconds 1
-    if ($cloudflared.HasExited) {
-      throw "cloudflared stopped before creating a public URL. Check $logPath"
+    if (Test-Path -LiteralPath $logPath) {
+      $log = Get-Content -LiteralPath $logPath -Raw -ErrorAction SilentlyContinue
+      $match = [regex]::Match($log, $UrlRegex)
+      if ($match.Success) {
+        $publicUrl = $match.Value
+      }
+    }
+    if ($process.HasExited -and -not $publicUrl) {
+      break
     }
   }
 
-  if (-not $script:PublicUrl) {
-    throw "Could not find a trycloudflare.com URL in $logPath"
+  [pscustomobject]@{
+    Name = $Name
+    Process = $process
+    OutputEvent = $outEvent
+    ErrorEvent = $errEvent
+    PublicUrl = $publicUrl
+    ExitCode = if ($process.HasExited) { $process.ExitCode } else { $null }
   }
+}
 
-  $openUrl = if ($token) { "$($script:PublicUrl)/?token=$token" } else { "$($script:PublicUrl)/" }
+function Show-PublicUrlAndWait {
+  param($Tunnel)
+
+  $openUrl = if ($token) { "$($Tunnel.PublicUrl)/?token=$token" } else { "$($Tunnel.PublicUrl)/" }
 
   Write-Host ""
   Write-Host "INTERNET URL:"
@@ -101,19 +113,78 @@ try {
 
   Start-Process $openUrl
 
-  while (-not $cloudflared.HasExited) {
+  while (-not $Tunnel.Process.HasExited) {
     Start-Sleep -Seconds 2
   }
+}
+
+Write-Host "Starting local PC proxy on $localUrl ..."
+$node = Start-Process -FilePath "node" `
+  -ArgumentList "server.js" `
+  -WorkingDirectory $PSScriptRoot `
+  -WindowStyle Minimized `
+  -PassThru
+
+$activeTunnel = $null
+
+try {
+  Start-Sleep -Seconds 2
+
+  if (Test-Path -LiteralPath $logPath) {
+    Remove-Item -LiteralPath $logPath -Force
+  }
+  New-Item -Path $logPath -ItemType File -Force | Out-Null
+
+  Write-Host ""
+  Write-Host "Trying Cloudflare Tunnel first..."
+  Write-Host "If Cloudflare is blocked or times out, localtunnel will be tried automatically."
+
+  $cloudflareArgs = "tunnel --no-autoupdate --protocol http2 --url $localUrl --loglevel info"
+  $activeTunnel = Start-TunnelProcess `
+    -Name "Cloudflare Tunnel" `
+    -FileName $CloudflaredPath `
+    -Arguments $cloudflareArgs `
+    -UrlRegex "https://[-a-zA-Z0-9]+\.trycloudflare\.com" `
+    -TimeoutSeconds 35
+
+  if ($activeTunnel.PublicUrl) {
+    Show-PublicUrlAndWait $activeTunnel
+    return
+  }
+
+  Write-Host ""
+  Write-Host "Cloudflare did not create a public URL."
+  Write-Host "Trying localtunnel fallback through npx..."
+  Stop-TunnelProcess $activeTunnel
+  $activeTunnel = $null
+
+  $npx = Get-Command "npx.cmd" -ErrorAction SilentlyContinue
+  if (-not $npx) {
+    $npx = Get-Command "npx" -ErrorAction SilentlyContinue
+  }
+  if (-not $npx) {
+    throw "npx was not found. Reinstall Node.js LTS with npm included."
+  }
+
+  $localtunnelArgs = "--yes localtunnel --port $proxyPort --local-host localhost"
+  $activeTunnel = Start-TunnelProcess `
+    -Name "localtunnel" `
+    -FileName $npx.Source `
+    -Arguments $localtunnelArgs `
+    -UrlRegex "https://[-a-zA-Z0-9]+\.loca\.lt" `
+    -TimeoutSeconds 60
+
+  if ($activeTunnel.PublicUrl) {
+    Write-Host ""
+    Write-Host "Note: localtunnel may show a visitor-password page on first open."
+    Write-Host "If it asks for a password, follow the instruction shown on that page."
+    Show-PublicUrlAndWait $activeTunnel
+    return
+  }
+
+  throw "No internet tunnel could be created. Check $logPath"
 } finally {
-  if ($outEvent) {
-    Unregister-Event -SubscriptionId $outEvent.Id -ErrorAction SilentlyContinue
-  }
-  if ($errEvent) {
-    Unregister-Event -SubscriptionId $errEvent.Id -ErrorAction SilentlyContinue
-  }
-  if ($cloudflared -and -not $cloudflared.HasExited) {
-    Stop-Process -Id $cloudflared.Id -Force -ErrorAction SilentlyContinue
-  }
+  Stop-TunnelProcess $activeTunnel
   if ($node -and -not $node.HasExited) {
     Stop-Process -Id $node.Id -Force -ErrorAction SilentlyContinue
   }

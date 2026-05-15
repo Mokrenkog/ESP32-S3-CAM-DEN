@@ -76,7 +76,9 @@ echo.
 echo Local proxy:  http://localhost:%PROXY_PORT%/
 echo Access token: %PROXY_TOKEN%
 echo.
-echo The script will print and open the real public trycloudflare.com URL.
+echo The script will try Cloudflare Tunnel first.
+echo If Cloudflare times out, it will try localtunnel automatically.
+echo The script will print and open the real public URL.
 echo Keep this window open while streaming.
 echo Press Ctrl+C to stop the internet tunnel.
 echo.
