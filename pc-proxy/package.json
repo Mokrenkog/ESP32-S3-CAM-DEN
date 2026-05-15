@@ -1,0 +1,11 @@
+{
+  "name": "esp32-s3-cam-den-pc-proxy",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local PC proxy for ESP32-S3-CAM-DEN video and audio",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {}
+}
