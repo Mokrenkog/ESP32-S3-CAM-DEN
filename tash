@@ -1,0 +1,24 @@
+*   [33m46d4c7d[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m)[m Merge branch 'main' into main
+[31m|[m[32m\[m  
+[31m|[m [32m|[m * [33mb9b5028[m[33m ([m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m Merge branch 'main' into main
+[31m|[m [32m|[m[31m/[m[32m|[m 
+[31m|[m[31m/[m[32m|[m[32m/[m  
+[31m|[m * [33mb08de03[m[33m ([m[1;31mupstream/main[m[33m)[m Локальне налаштування
+* [34m|[m [33m20c7311[m Co-authored-by: Григорій Мокренко <Mokrenkog@users.noreply.github.com>
+[34m|[m[34m/[m  
+* [33m104b8bf[m Add relay intercom support for paired boards
+* [33m23daceb[m Tune relay stream for stability
+* [33m606f88a[m Simplify viewer and raise relay quality
+* [33m997d2f1[m Fix relay device websocket path
+* [33m9906fed[m Split cloud media from MQTT control
+* [33mf18ce1a[m Add private MQTT broker credentials
+* [33mceb66de[m Improve MQTT media behavior
+* [33maf8ad1f[m Stabilize MQTT transport on ESP32
+* [33mf805b0e[m Tune MQTT cloud streaming stability
+* [33m031d8fa[m Improve MQTT site connection feedback
+* [33mc903420[m Add serverless MQTT cloud mode for GitHub Pages
+* [33m85249f4[m Switch GitHub Pages deployment to gh-pages branch
+* [33m40b6ca0[m Add cloud relay, GitHub Pages UI, and relay-ready firmware
+* [33m0caa54e[m[33m ([m[1;31morigin/gh-pages[m[33m)[m Tune public viewer defaults
+* [33mb9d4290[m Simplify viewer UI
+* [33mb0953d0[m Switch site to hybrid media relay mode
