@@ -76,7 +76,14 @@ echo.
 echo Local proxy:  http://localhost:%PROXY_PORT%/
 echo Access token: %PROXY_TOKEN%
 echo.
-echo The script will try Cloudflare Tunnel first.
+echo For fully automatic browser opening, ngrok is recommended.
+echo Get a free token from: https://dashboard.ngrok.com/get-started/your-authtoken
+if "%NGROK_AUTHTOKEN%"=="" (
+  set /p NGROK_AUTHTOKEN=Ngrok authtoken [Enter to skip]: 
+)
+echo.
+echo The script will try ngrok first if token is provided.
+echo Then it will try Cloudflare Tunnel.
 echo If Cloudflare times out, it will try localtunnel automatically.
 echo The script will print and open the real public URL.
 echo Keep this window open while streaming.

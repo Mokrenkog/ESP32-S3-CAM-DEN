@@ -9,6 +9,31 @@ $proxyPort = if ($env:PROXY_PORT) { $env:PROXY_PORT } else { "8080" }
 $localUrl = "http://localhost:$proxyPort"
 $token = if ($env:PROXY_TOKEN) { $env:PROXY_TOKEN } else { "" }
 $logPath = Join-Path $PSScriptRoot "internet-tunnel-last.log"
+$toolsPath = Join-Path $PSScriptRoot "tools"
+
+function Ensure-Ngrok {
+  if (-not (Test-Path -LiteralPath $toolsPath)) {
+    New-Item -Path $toolsPath -ItemType Directory -Force | Out-Null
+  }
+
+  $ngrokExe = Join-Path $toolsPath "ngrok.exe"
+  if (Test-Path -LiteralPath $ngrokExe) {
+    return $ngrokExe
+  }
+
+  $zipPath = Join-Path $toolsPath "ngrok.zip"
+  Write-Host "Downloading ngrok..."
+  Invoke-WebRequest `
+    -Uri "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip" `
+    -OutFile $zipPath
+  Expand-Archive -LiteralPath $zipPath -DestinationPath $toolsPath -Force
+  Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
+
+  if (-not (Test-Path -LiteralPath $ngrokExe)) {
+    throw "ngrok.exe was not found after extracting $zipPath"
+  }
+  return $ngrokExe
+}
 
 function Write-LogLine {
   param([string]$Line)
@@ -136,7 +161,33 @@ try {
   New-Item -Path $logPath -ItemType File -Force | Out-Null
 
   Write-Host ""
-  Write-Host "Trying Cloudflare Tunnel first..."
+  if ($env:NGROK_AUTHTOKEN) {
+    Write-Host "Trying ngrok first..."
+    $ngrokExe = Ensure-Ngrok
+    & $ngrokExe config add-authtoken $env:NGROK_AUTHTOKEN | ForEach-Object { Write-LogLine $_ }
+
+    $activeTunnel = Start-TunnelProcess `
+      -Name "ngrok" `
+      -FileName $ngrokExe `
+      -Arguments "http $proxyPort --log stdout" `
+      -UrlRegex "https://[-a-zA-Z0-9.]+\.ngrok[-a-zA-Z0-9.]*\.(app|io|dev)" `
+      -TimeoutSeconds 45
+
+    if ($activeTunnel.PublicUrl) {
+      Show-PublicUrlAndWait $activeTunnel
+      return
+    }
+
+    Write-Host ""
+    Write-Host "ngrok did not create a public URL."
+    Stop-TunnelProcess $activeTunnel
+    $activeTunnel = $null
+  } else {
+    Write-Host "No NGROK_AUTHTOKEN was provided, skipping ngrok."
+  }
+
+  Write-Host ""
+  Write-Host "Trying Cloudflare Tunnel..."
   Write-Host "If Cloudflare is blocked or times out, localtunnel will be tried automatically."
 
   $cloudflareArgs = "tunnel --no-autoupdate --protocol http2 --url $localUrl --loglevel info"

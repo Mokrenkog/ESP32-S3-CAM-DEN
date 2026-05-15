@@ -70,9 +70,21 @@ enter:
 y
 ```
 
-The script downloads `cloudflared.exe` into `pc-proxy\tools` if needed, starts
-the local proxy, and tries Cloudflare Tunnel first. If Cloudflare times out, it
-tries a `localtunnel` fallback through `npx`.
+For fully automatic browser opening, use ngrok:
+
+1. Create a free ngrok account.
+2. Copy your token from `https://dashboard.ngrok.com/get-started/your-authtoken`.
+3. Paste it when `start-proxy.bat` asks for `Ngrok authtoken`.
+
+The script downloads `ngrok.exe` into `pc-proxy\tools` if needed, starts the
+local proxy, and opens a public URL like:
+
+```text
+https://random-name.ngrok-free.app/?token=esp32-12345-12345-12345
+```
+
+If no ngrok token is provided, the script tries Cloudflare Tunnel. If
+Cloudflare times out, it tries a `localtunnel` fallback through `npx`.
 
 The script opens the real public URL automatically. It will look similar to:
 
