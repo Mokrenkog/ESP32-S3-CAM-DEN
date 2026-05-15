@@ -44,13 +44,17 @@
 
 constexpr uint16_t HTTP_PORT = 80;
 constexpr uint16_t AUDIO_PORT = 81;
+<<<<<<< HEAD
 constexpr uint16_t SPEAKER_INPUT_PORT = 82;
+=======
+>>>>>>> b9b50282694c7cdee34081921c97131fde9ac47e
 constexpr bool ENABLE_DIRECT_AP = true;
 constexpr bool INIT_CAMERA_BEFORE_WIFI = false;
 constexpr bool KEEP_CAMERA_INITIALIZED = false;
 constexpr bool AUTO_START_AV_ON_PAGE_LOAD = true;
 constexpr framesize_t CAMERA_FRAME_SIZE = FRAMESIZE_QVGA;
 constexpr int CAMERA_JPEG_QUALITY = 14;
+<<<<<<< HEAD
 constexpr framesize_t RELAY_AV_CAMERA_FRAME_SIZE = FRAMESIZE_CIF;
 constexpr int RELAY_AV_CAMERA_JPEG_QUALITY = 12;
 constexpr framesize_t RELAY_VIDEO_ONLY_CAMERA_FRAME_SIZE = FRAMESIZE_HVGA;
@@ -59,6 +63,8 @@ constexpr framesize_t MQTT_AV_CAMERA_FRAME_SIZE = FRAMESIZE_QQVGA;
 constexpr int MQTT_AV_CAMERA_JPEG_QUALITY = 24;
 constexpr framesize_t MQTT_VIDEO_ONLY_CAMERA_FRAME_SIZE = FRAMESIZE_QVGA;
 constexpr int MQTT_VIDEO_ONLY_CAMERA_JPEG_QUALITY = 18;
+=======
+>>>>>>> b9b50282694c7cdee34081921c97131fde9ac47e
 constexpr size_t CAMERA_FB_COUNT = 1;
 constexpr uint16_t STREAM_DELAY_MS = 80;
 constexpr uint32_t CAMERA_IDLE_STOP_MS = 30000;
@@ -72,9 +78,12 @@ constexpr uint32_t SPEAKER_SAMPLE_RATE = 16000;
 constexpr size_t SPEAKER_FRAMES = 256;
 constexpr i2s_port_t SPEAKER_I2S_PORT = I2S_NUM_1;
 constexpr int SPEAKER_DEFAULT_AMPLITUDE = 2500;
+<<<<<<< HEAD
 constexpr size_t MQTT_AUDIO_FRAMES = 512;
 constexpr uint8_t RELAY_PACKET_VIDEO_JPEG = 1;
 constexpr uint8_t RELAY_PACKET_AUDIO_PCM = 2;
+=======
+>>>>>>> b9b50282694c7cdee34081921c97131fde9ac47e
 
 WebServer server(HTTP_PORT);
 WiFiServer audioServer(AUDIO_PORT);
@@ -96,6 +105,7 @@ int activeCameraJpegQuality = CAMERA_JPEG_QUALITY;
 
 static void stopCamera();
 static void applyCameraSensorProfile(framesize_t frameSize, int jpegQuality, bool fullTuning = false);
+<<<<<<< HEAD
 static void markMqttDisconnected(const char *status);
 static bool mqttTalkbackActive();
 static bool mqttHasBrokerCredentials();
@@ -237,6 +247,8 @@ static String relayBuildPath(const char *channel) {
   path += relayUrlEncode(RELAY_DEVICE_TOKEN);
   return path;
 }
+=======
+>>>>>>> b9b50282694c7cdee34081921c97131fde9ac47e
 
 static bool hasPsramHeap() {
   return heap_caps_get_free_size(MALLOC_CAP_SPIRAM) > 0;
@@ -1780,6 +1792,7 @@ static void handleNotFound() {
   server.send(404, "text/plain; charset=utf-8", "Not found");
 }
 
+<<<<<<< HEAD
 static bool relaySendText(WebSocketsClient &socket, const String &line) {
   if (!claimRelaySocket(200)) {
     return false;
@@ -2488,6 +2501,8 @@ static void startMqttBridge() {
   Serial.println(MQTT_BROKER_HOST);
 }
 
+=======
+>>>>>>> b9b50282694c7cdee34081921c97131fde9ac47e
 static void startWiFi() {
   WiFi.mode(ENABLE_DIRECT_AP ? WIFI_AP_STA : WIFI_STA);
   WiFi.setSleep(false);
@@ -2561,6 +2576,7 @@ static void startAudioServer() {
   }
 }
 
+<<<<<<< HEAD
 static void startSpeakerInputServer() {
   speakerInputServer.begin();
   BaseType_t taskStarted = xTaskCreatePinnedToCore(
@@ -2580,6 +2596,8 @@ static void startSpeakerInputServer() {
   }
 }
 
+=======
+>>>>>>> b9b50282694c7cdee34081921c97131fde9ac47e
 void setup() {
   Serial.begin(115200);
   delay(1000);
@@ -2612,6 +2630,7 @@ void setup() {
 void loop() {
   server.handleClient();
 
+<<<<<<< HEAD
   if (relayConfigured() && claimRelaySocket(20)) {
     if (!hybridCloudMode()) {
       relayControlSocket.loop();
@@ -2634,6 +2653,8 @@ void loop() {
     }
   }
 
+=======
+>>>>>>> b9b50282694c7cdee34081921c97131fde9ac47e
   unsigned long now = millis();
   if (!KEEP_CAMERA_INITIALIZED && cameraReady && lastCameraUseMs > 0 && now - lastCameraUseMs >= CAMERA_IDLE_STOP_MS) {
     Serial.println("Camera idle timeout");
