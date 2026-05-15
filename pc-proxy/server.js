@@ -11,7 +11,6 @@ const PROXY_HOST = process.env.PROXY_HOST || "0.0.0.0";
 const PROXY_PORT = Number(process.env.PROXY_PORT || 8080);
 const ESP32_AUTH_USER = process.env.ESP32_AUTH_USER || "cam";
 const ESP32_AUTH_PASSWORD = process.env.ESP32_AUTH_PASSWORD || "1234";
-const PROXY_TOKEN = process.env.PROXY_TOKEN || "";
 const REQUEST_TIMEOUT_MS = Number(process.env.ESP32_REQUEST_TIMEOUT_MS || 15000);
 
 function basicAuthHeader() {
@@ -21,52 +20,12 @@ function basicAuthHeader() {
   return `Basic ${Buffer.from(`${ESP32_AUTH_USER}:${ESP32_AUTH_PASSWORD}`).toString("base64")}`;
 }
 
-function parseCookies(header) {
-  const cookies = {};
-  if (!header) {
-    return cookies;
-  }
-  for (const part of header.split(";")) {
-    const index = part.indexOf("=");
-    if (index > -1) {
-      cookies[part.slice(0, index).trim()] = decodeURIComponent(part.slice(index + 1).trim());
-    }
-  }
-  return cookies;
-}
-
-function proxyAuthorized(req, parsedUrl, res) {
-  if (!PROXY_TOKEN) {
-    return true;
-  }
-
-  const token = parsedUrl.searchParams.get("token") || req.headers["x-proxy-token"] || "";
-  const cookies = parseCookies(req.headers.cookie || "");
-  if (token === PROXY_TOKEN || cookies.pc_proxy_token === PROXY_TOKEN) {
-    if (token === PROXY_TOKEN && res) {
-      res.setHeader("Set-Cookie", `pc_proxy_token=${encodeURIComponent(PROXY_TOKEN)}; Path=/; HttpOnly; SameSite=Lax`);
-    }
-    return true;
-  }
-
-  return false;
-}
-
 function sendText(res, status, text, contentType = "text/plain; charset=utf-8") {
   res.writeHead(status, {
     "Content-Type": contentType,
     "Cache-Control": "no-store",
   });
   res.end(text);
-}
-
-function sendUnauthorized(res) {
-  sendText(
-    res,
-    401,
-    `<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Proxy locked</title><style>body{font-family:system-ui,sans-serif;margin:32px;max-width:720px}input,button{font:inherit;padding:10px;margin-top:8px}input{min-width:280px}</style></head><body><h1>Proxy locked</h1><p>Open this page with <code>?token=YOUR_TOKEN</code>, or enter the token shown in the proxy window.</p><form method='GET' action='/'><label>Token<br><input name='token' autocomplete='off' autofocus></label><br><button type='submit'>Open video</button></form></body></html>`,
-    "text/html; charset=utf-8"
-  );
 }
 
 function checkEsp32Health() {
@@ -163,7 +122,6 @@ function proxyHttp(req, res, targetPort, targetPath, useBoardAuth) {
 }
 
 function pageHtml() {
-  const tokenQuery = PROXY_TOKEN ? "?token=..." : "";
   return `<!doctype html>
 <html lang="uk">
 <head>
@@ -191,7 +149,7 @@ function pageHtml() {
     <button id="audioLeft">Audio left</button>
     <button id="audioRight" class="secondary">Audio right</button>
     <button id="audioStop" class="secondary">Stop audio</button>
-    <a class="secondary" href="/health${tokenQuery}" target="_blank">Health</a>
+    <a class="secondary" href="/health" target="_blank">Health</a>
     <span id="status" class="status">Video: <code>${ESP32_HOST}:${ESP32_HTTP_PORT}</code>, audio: <code>${ESP32_HOST}:${ESP32_AUDIO_PORT}</code></span>
   </div>
   <script>
@@ -303,11 +261,6 @@ function handleRequest(req, res) {
   const parsedUrl = new URL(req.url, `http://${req.headers.host || "localhost"}`);
   const path = parsedUrl.pathname;
 
-  if (!proxyAuthorized(req, parsedUrl, res)) {
-    sendUnauthorized(res);
-    return;
-  }
-
   if (req.method !== "GET") {
     sendText(res, 405, "Method not allowed\n");
     return;
@@ -350,10 +303,6 @@ function rejectUpgrade(socket, status, message) {
 
 function handleUpgrade(req, socket, head) {
   const parsedUrl = new URL(req.url, `http://${req.headers.host || "localhost"}`);
-  if (!proxyAuthorized(req, parsedUrl, null)) {
-    rejectUpgrade(socket, 401, "Unauthorized");
-    return;
-  }
   if (parsedUrl.pathname !== "/audio.ws") {
     rejectUpgrade(socket, 404, "Not Found");
     return;
@@ -393,10 +342,7 @@ server.listen(PROXY_PORT, PROXY_HOST, () => {
   console.log(`Video target: http://${ESP32_HOST}:${ESP32_HTTP_PORT}/stream`);
   console.log(`Audio target: ws://${ESP32_HOST}:${ESP32_AUDIO_PORT}/audio.ws`);
   console.log(`PC proxy: ${localUrl}`);
-  if (PROXY_TOKEN) {
-    console.log(`Proxy token is enabled. Open: ${localUrl}?token=${PROXY_TOKEN}`);
-  }
   if (process.env.OPEN_BROWSER === "1") {
-    exec(`start "" "${PROXY_TOKEN ? `${localUrl}?token=${encodeURIComponent(PROXY_TOKEN)}` : localUrl}"`);
+    exec(`start "" "${localUrl}"`);
   }
 });

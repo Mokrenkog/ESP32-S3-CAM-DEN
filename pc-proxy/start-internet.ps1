@@ -7,7 +7,6 @@ $ErrorActionPreference = "Stop"
 
 $proxyPort = if ($env:PROXY_PORT) { $env:PROXY_PORT } else { "8080" }
 $localUrl = "http://localhost:$proxyPort"
-$token = if ($env:PROXY_TOKEN) { $env:PROXY_TOKEN } else { "" }
 $logPath = Join-Path $PSScriptRoot "internet-tunnel-last.log"
 $toolsPath = Join-Path $PSScriptRoot "tools"
 
@@ -173,7 +172,7 @@ function Start-TunnelProcess {
 function Show-PublicUrlAndWait {
   param($Tunnel)
 
-  $openUrl = if ($token) { "$($Tunnel.PublicUrl)/?token=$([uri]::EscapeDataString($token))" } else { "$($Tunnel.PublicUrl)/" }
+  $openUrl = "$($Tunnel.PublicUrl)/"
 
   Write-Host ""
   Write-Host "INTERNET URL:"

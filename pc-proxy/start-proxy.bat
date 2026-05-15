@@ -54,8 +54,6 @@ node server.js
 goto done
 
 :internet
-if "%PROXY_TOKEN%"=="" set PROXY_TOKEN=%RANDOM%%RANDOM%%RANDOM%
-
 if not exist tools mkdir tools
 set CLOUDFLARED=%~dp0tools\cloudflared.exe
 
@@ -72,7 +70,6 @@ if not exist "%CLOUDFLARED%" (
 
 echo.
 echo Local proxy:  http://localhost:%PROXY_PORT%/
-echo Access token: %PROXY_TOKEN%
 echo.
 echo Internet tunnel starts automatically.
 echo The script will try ngrok first using the saved ngrok configuration.
