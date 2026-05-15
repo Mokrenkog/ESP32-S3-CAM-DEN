@@ -54,6 +54,7 @@ constexpr uint16_t STREAM_DELAY_MS = 80;
 constexpr uint32_t CAMERA_IDLE_STOP_MS = 30000;
 constexpr uint32_t AUDIO_SAMPLE_RATE = 16000;
 constexpr size_t AUDIO_FRAMES = 256;
+constexpr uint32_t AUDIO_SERVER_TASK_STACK = 6144;
 constexpr i2s_port_t MIC_I2S_PORT = I2S_NUM_0;
 constexpr int AUDIO_SAMPLE_SHIFT = 0;
 constexpr int AUDIO_SAMPLE_GAIN = 4;
